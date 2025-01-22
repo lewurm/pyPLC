@@ -49,9 +49,23 @@ soc_simulation = yes
 #  dieter: Serial controlled device, which controls the digital outputs. E.g. arduino from https://github.com/uhi22/dieter
 #  beaglebone: GPIO pins of the beagleBone, as used in https://github.com/jsphuebner/pyPLC/tree/beaglebone
 #  celeron55device: Serial controlled device as used in https://openinverter.org/forum/viewtopic.php?p=56192#p56192
+#  kostalinverter: DIY DC Wallbox by lewurm, documented here: XXX
 digital_output_device = dieter
 #digital_output_device = beaglebone
 #digital_output_device = celeron55device
+#digital_output_device = kostalinverter
+
+
+#### Config for kostalinverter only
+# homeassistant_url = http://192.168.XXX.YYY:8123
+# homeassistant_token = veryVeryVeryveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerveryVeryVerLoooooooooonToken
+#
+# kostalinverter_url = 192.168.XXX.ZZZ
+# # can be found on the device
+# kostalinverter_password = asdfasdfasdf
+# # use your favorite search engine to figure that one out
+# kostalinverter_servicecode = ABCD1234
+
 
 
 # Device to read the physically measured inlet voltage in PevMode

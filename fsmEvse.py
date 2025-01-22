@@ -6,7 +6,7 @@
 
 import pyPlcTcpSocket
 import time # for time.sleep()
-from helpers import prettyHexMessage, combineValueAndMultiplier
+from helpers import prettyHexMessage, combineValueAndMultiplier, currentMillis
 from mytestsuite import *
 from random import random
 from exiConnector import * # for EXI data handling/converting
@@ -36,8 +36,17 @@ class fsmEvse():
         self.addToTrace("from " + str(self.state) + " entering " + str(n))
         if (self.state!=0) and (n==0):
             self.publishStatus("Waiting f AppHandShake")
+            self.hardwareInterface.stopDCSoft()
         self.state = n
         self.cyclesInState = 0
+
+    def safetyTimeout(self):
+        if self.lastCurrentDemandReq is not None and self.lastSafetyTimeout < 2:
+            # typically 25-50ms
+            # 150ms: seems fine
+            # 110ms: TODO: document results
+            return (currentMillis() - self.lastCurrentDemandReq) > 110
+        return False
 
     def isTooLong(self):
         # The timeout handling function.
@@ -55,6 +64,40 @@ class fsmEvse():
 
 
     def stateFunctionWaitForSupportedApplicationProtocolRequest(self):
+        # do not start state machine
+        if not self.hardwareInterface.haasDcwbAllowCharging():
+            self.hardwareInterface._setCp(False)
+            self.hardwareInterface.haasDcwbEvseState("disconnected")
+            time.sleep(0.5)
+            return
+        elif self.hardwareInterface.hasError():
+            self.hardwareInterface._setCp(False)
+            self.addToTrace("hardwareInterface broken: " + str(self.hardwareInterface.errorState))
+            self.hardwareInterface.haasDcwbEvseState("error")
+            time.sleep(0.5)
+            return
+        else:
+            self.hardwareInterface.haasDcwbEvseState("start_session")
+            self.hardwareInterface._setCp(True)
+            # start with state machine, clear possible stop request
+            self.blChargeStopTrigger = 0
+
+        if self.hardwareInterface.closedDCMinus:
+            self.hardwareInterface.setError("DC- is closed at session start")
+            return
+
+        if self.hardwareInterface.closedDCPlus:
+            self.hardwareInterface.setError("DC+ is closed at session start")
+            return
+
+        if self.hardwareInterface.closedPrecharge:
+            self.hardwareInterface.setError("Precharge is closed at session start")
+            return
+
+        if not self.hardwareInterface.closedCp:
+            self.hardwareInterface.setError("CP is not closed at session start")
+            return
+
         if (len(self.rxData)>0):
             self.addToTrace("In state WaitForSupportedApplicationProtocolRequest, received " + prettyHexMessage(self.rxData))
             exidata = removeV2GTPHeader(self.rxData)
@@ -132,6 +175,7 @@ class fsmEvse():
                 self.evccid = jsondict.get("EVCCID", "")
 
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForSessionSetupRequest")
             self.enterState(0)
 
     def stateFunctionWaitForServiceDiscoveryRequest(self):
@@ -153,6 +197,7 @@ class fsmEvse():
                 self.publishStatus("Services discovered")
                 self.enterState(stateWaitForServicePaymentSelectionRequest)
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForServiceDiscoveryRequest")
             self.enterState(0)
 
     def stateFunctionWaitForServicePaymentSelectionRequest(self):
@@ -177,6 +222,7 @@ class fsmEvse():
                 self.publishStatus("ServicePayment selected")
                 self.enterState(stateWaitForFlexibleRequest) # todo: not clear, what is specified. The Ioniq sends PowerDeliveryReq as next.
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForServicePaymentSelectionRequest")
             self.enterState(0)
 
     def stateFunctionWaitForFlexibleRequest(self):
@@ -186,12 +232,27 @@ class fsmEvse():
             self.rxData = []
             strConverterResult = exiDecode(exidata, "D"+self.schemaSelection) # decodes DIN or ISO1
             self.addToTrace(strConverterResult)
+            self.lastCurrentDemandReq = None
             if (strConverterResult.find("PowerDeliveryReq")>0):
                 # todo: check the request content, and fill response parameters
                 self.addToTrace("Received PowerDeliveryReq. Extracting SoC parameters")
                 jsondict = json.loads(strConverterResult)
                 current_soc = int(jsondict.get("EVRESSSOC", -1))
                 self.publishSoCs(current_soc, origin="PowerDeliveryReq")
+
+                ready2charge = int(jsondict.get("ReadyToChargeState", -1))
+                if ready2charge == 1:
+                    self.addToTrace("powerdev: all good")
+                else:
+                    # should be `ready2charge == 0`
+                    startTimestamp = currentMillis()
+                    self.hardwareInterface.stopDCSoft()
+                    self.addToTrace("car is about to stop the charging session")
+                    while currentMillis() - startTimestamp < 600:
+                        time.sleep(0.05)
+                    self.hardwareInterface.stopDCSoft()
+                    self.hardwareInterface.haasDcwbEvseState("stop_session")
+
                 msg = addV2GTPHeader(exiEncode("E"+self.schemaSelection+"h")) # EDh for Encode, Din, PowerDeliveryResponse
                 if (testsuite_faultinjection_is_triggered(TC_EVSE_ResponseCode_Failed_for_PowerDeliveryRes)):
                     # send a PowerDeliveryResponse with Responsecode Failed
@@ -311,6 +372,11 @@ class fsmEvse():
                 self.Tcp.transmit(msg)
                 self.enterState(stateWaitForFlexibleRequest)
             if (strConverterResult.find("CurrentDemandReq")>0):
+                # self.hardwareInterface.stopPrecharge()
+                self.lastCurrentDemandReq = currentMillis()
+                self.lastSafetyTimeout = 0
+                self.hardwareInterface.opInverter()
+
                 # check the request content, and fill response parameters
                 uTarget = 220 # default in case we cannot decode the requested voltage
                 iTarget = 1 # default...
@@ -343,6 +409,14 @@ class fsmEvse():
                     # User pressed the STOP button on the charger. Send EVSE_Shutdown.
                     self.addToTrace("User pressed the STOP button on the charger. Sending EVSE_Shutdown.")
                     strEVSEStatus = "2" # 2=EVSE_Shutdown, means the user stopped the session on the charger.
+                    startTimestamp = currentMillis()
+                    self.hardwareInterface.stopDCSoft()
+                    self.addToTrace("car is about to stop the charging session")
+                    self.hardwareInterface.haasDcwbEvseState("stop_session")
+                    while currentMillis() - startTimestamp < 300:
+                        time.sleep(0.05)
+                    self.hardwareInterface.stopDCSoft()
+                    self.hardwareInterface.haasDcwbEvseState("stop_session")
                 else:
                     # The normal case. No stop requested from user. Just send EVSE_Ready.
                     strEVSEStatus = "1" # 1=EVSE_Ready
@@ -377,27 +451,51 @@ class fsmEvse():
             if (strConverterResult.find("SessionStopReq")>0):
                 # todo: check the request content, and fill response parameters
                 msg = addV2GTPHeader(exiEncode("E"+self.schemaSelection+"k")) # EDk for Encode, Din, SessionStopRes
+                startTimestamp = currentMillis()
+                self.hardwareInterface.stopDCSoft()
+                self.hardwareInterface.haasDcwbEvseState("stop_session")
+
                 self.showDecodedTransmitMessage(msg)
+
+                while currentMillis() - startTimestamp < 250:
+                    time.sleep(0.04)
+
+                self.hardwareInterface.stopDCHard()
+
+                while currentMillis() - startTimestamp < 600:
+                    time.sleep(0.05)
+
                 self.addToTrace("responding " + prettyHexMessage(msg))
                 self.publishStatus("SessionStop")
                 self.Tcp.transmit(msg)
                 self.enterState(stateWaitForFlexibleRequest) # todo: not clear, what is specified in DIN
 
-
+        if (self.safetyTimeout()):
+            if self.lastSafetyTimeout <= 1:
+                self.hardwareInterface.stopDCSoft()
+                self.addToTrace("safetyTimeout: reducing power to zero (soft)")
+            else:
+                self.addToTrace("safetyTimeout: reducing power to zero (hard)")
+                self.hardwareInterface.stopDCHard()
+            self.lastSafetyTimeout += 1
 
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForFlexibleRequest")
             self.enterState(0)
 
     def stateFunctionWaitForChargeParameterDiscoveryRequest(self):
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForChargeParameterDiscoveryRequest")
             self.enterState(0)
 
     def stateFunctionWaitForCableCheckRequest(self):
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForCableCheckRequest")
             self.enterState(0)
 
     def stateFunctionWaitForPreChargeRequest(self):
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForPreChargeRequest")
             self.enterState(0)
 
     def stateFunctionWaitForPowerDeliveryRequest(self):
@@ -407,6 +505,7 @@ class fsmEvse():
             self.rxData = []
             self.enterState(0)
         if (self.isTooLong()):
+            self.addToTrace("too long: stateFunctionWaitForPowerDeliveryRequest")
             self.enterState(0)
 
 
@@ -424,18 +523,22 @@ class fsmEvse():
 
     def reInit(self):
         self.addToTrace("re-initializing fsmEvse")
+
         self.state = 0
         self.cyclesInState = 0
+        self.lastCurrentDemandReq = None
         self.rxData = []
         self.simulatedPresentVoltage = 0
         self.Tcp.resetTheConnection()
+        self.doneChargingSessions += 1
 
     def socketStateNotification(self, notification):
         if (notification==0):
+            self.addToTrace("re-initializing fsmEvse due to broken connection, self.lastCurrentDemandReq: " + str(self.lastCurrentDemandReq))
+            self.hardwareInterface.stopDCHard()
             # The TCP informs us, that the connection is broken.
             # Let's restart the state machine.
             self.publishStatus("TCP conn broken")
-            self.addToTrace("re-initializing fsmEvse due to broken connection")
             self.reInit()
         if (notification==1):
             # The TCP informs us, that it is listening, means waiting for incoming connection.
@@ -458,12 +561,18 @@ class fsmEvse():
         self.Tcp = pyPlcTcpSocket.pyPlcTcpServerSocket(self.callbackAddToTrace, self.socketStateNotification)
         self.state = 0
         self.cyclesInState = 0
+        self.lastCurrentDemandReq = None
         self.rxData = []
         self.evccid = ""
         self.blChargeStopTrigger = 0
         self.nCableCheckLoops = 0
+        self.stepupconverter = None
+        self.doneChargingSessions = 0
 
     def mainfunction(self):
+        if not self.hardwareInterface.haasDcwbAllowCharging() or self.hardwareInterface.hasError():
+            self.stopCharging()
+
         self.Tcp.mainfunction() # call the lower-level worker
         if (self.Tcp.isRxDataAvailable()):
                 self.rxData = self.Tcp.getRxData()
@@ -478,7 +587,7 @@ class fsmEvse():
 
 if __name__ == "__main__":
     print("Testing the evse state machine")
-    evse = fsmEvse()
+    evse = fsmEvse(None, None, None, None, None)
     print("Press Ctrl-Break for aborting")
     while (True):
         time.sleep(0.1)

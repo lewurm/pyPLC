@@ -15,6 +15,7 @@ import time
 import subprocess
 import hardwareInterface
 import connMgr
+from helpers import currentMillis
 
 
 class pyPlcWorker():
@@ -32,6 +33,7 @@ class pyPlcWorker():
         self.connMgr = connMgr.connMgr(self.workerAddToTrace, self.showStatus)
         self.hp = pyPlcHomeplug.pyPlcHomeplug(self.workerAddToTrace, self.showStatus, self.mode, self.addressManager, self.connMgr, self.isSimulationMode)
         self.hardwareInterface = hardwareInterface.hardwareInterface(self.workerAddToTrace, self.showStatus, self.hp)
+        self.hp.setHardwareInterface(self.hardwareInterface)
         self.hp.printToUdp("pyPlcWorker init")
         # Find out the version number, using git.
         # see https://stackoverflow.com/questions/14989858/get-the-current-git-hash-in-a-python-script
@@ -79,7 +81,12 @@ class pyPlcWorker():
             self.connMgr.mainfunction()
         self.handleTcpConnectionTrigger()
         self.hp.mainfunction() # call the lower-level workers
+        # self.workerAddToTrace("[timing] before HW main")
+        hwMainStart = currentMillis()
         self.hardwareInterface.mainfunction()
+        hwMainTimeSpent = currentMillis() - hwMainStart
+        if hwMainTimeSpent > 100:
+            self.workerAddToTrace(f"[timing] HW mainfunction took too long: {hwMainTimeSpent}ms")
         if (self.mode == C_EVSE_MODE):
             if (self.nMainFunctionCalls>8*33): # ugly. Wait with EVSE high level handling, until the modem restarted.
                 self.evse.mainfunction() # call the evse state machine

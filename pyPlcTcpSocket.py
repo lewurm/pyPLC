@@ -240,7 +240,8 @@ class pyPlcTcpServerSocket():
                 # Let's take the data from it:
                 try:
                     data = s.recv(1024)
-                except:
+                except Exception as e:
+                    self.addToTrace("connection died with exception: " + str(e))
                     # The client closed the connection in the meanwhile.
                     #print("The client closed the connection in the meanwhile.")
                     data = None

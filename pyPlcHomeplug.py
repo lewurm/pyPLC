@@ -1179,6 +1179,10 @@ class pyPlcHomeplug():
     def printToUdp(self, s):
         udplog.udplog_log(s)
 
+    def setHardwareInterface(self, hardwareInterface):
+        self.hardwareInterface = hardwareInterface
+        self.ipv6.setHardwareInterface(hardwareInterface)
+
     def __init__(self, callbackAddToTrace=None, callbackShowStatus=None, mode=C_LISTEN_MODE, addrMan=None, connMgr=None, isSimulationMode=0):
         self.mytransmitbuffer = bytearray("Hallo das ist ein Test", 'UTF-8')
         self.nPacketsReceived = 0
@@ -1241,6 +1245,7 @@ class pyPlcHomeplug():
             self.enterPevMode()
             self.pevMac = self.myMAC
         self.showStatus(prettyMac(self.pevMac), "pevmac")
+        self.hardwareInterface = None
         print("sniffer created at " + self.strInterfaceName) # we use print, because addToLog does not yet work at this stage in the init.
 
     def addToTrace(self, s):

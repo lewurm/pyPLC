@@ -7,13 +7,12 @@ from configmodule import getConfigValue, getConfigValueBool
 from pyPlcModes import *
 import sys # for argv
 import requests
-
-startTime_ms = round(time.time()*1000)
+from helpers import currentMillis
+import traceback
 
 def cbAddToTrace(s):
-    currentTime_ms = round(time.time()*1000)
-    dT_ms = currentTime_ms - startTime_ms
-    print("[" + str(dT_ms) + "ms] " + s)
+    dT_ms = currentMillis()
+    print("[" + str(dT_ms) + "ms] " + str(s))
 
 def cbShowStatus(s, selection=""):
     pass
@@ -62,9 +61,16 @@ print("press Ctrl-C to exit")
 worker=pyPlcWorker.pyPlcWorker(cbAddToTrace, cbShowStatus, myMode, 0, socStatusCallback)
 
 nMainloops=0
-while (1):
-    time.sleep(.03) # 'do some calculation'
-    nMainloops+=1
-    worker.mainfunction()
+try:
+    while worker.evse.doneChargingSessions <= 0:
+        time.sleep(0.03) # 'do some calculation'
+        nMainloops+=1
+        worker.mainfunction()
+except:
+    print("HELLO", file=sys.stderr)
+    traceback.print_exc()
+finally:
+    worker.hardwareInterface.close()
+    print("HARDWARE done", file=sys.stderr)
         
 #---------------------------------------------------------------

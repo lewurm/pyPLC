@@ -22,7 +22,7 @@
 # SLAAC: Stateless auto address configuration (not SLAC!). A method to automatically set IPv6 address, based
 #        on the 6 byte MAC address.
 
-from helpers import showAsHex, prettyHexMessage, prettyMac
+from helpers import showAsHex, prettyHexMessage, prettyMac, arrayEquals
 import udpChecksum
 
 
@@ -314,6 +314,11 @@ class ipv6handler():
             self.ExiPacket = self.v2gframe[8:] # the exi payload, without the 8 bytes V2GTP header
             s = "[SNIFFER] EXI from " + str(self.tcpsourceport) + " to " + str(self.tcpdestinationport) + " " + prettyHexMessage(self.ExiPacket)
             print(s)
+            if arrayEquals(self.ExiPacket, self.LastExiPacket):
+                print("[SNIFFER] WARNING: Already seen, TCP retry?")
+                if self.hardwareInterface is not None:
+                    self.hardwareInterface.stopDCSoft()
+            self.LastExiPacket = self.ExiPacket
             # print(s, file=self.exiLogFile)
             # Todo: further process the EXI packet. E.g. write it into file for offline analysis.
             # And send it to decoder.
@@ -357,6 +362,9 @@ class ipv6handler():
                     self.evaluateUdpPayload()
             if (self.nextheader == 0x06): # it is an TCP frame
                 self.evaluateTcpPacket()
+
+    def setHardwareInterface(self, hardwareInterface):
+        self.hardwareInterface = hardwareInterface
                         
     def __init__(self, transmitCallback, addressManager, connMgr, callbackShowStatus):
         self.iAmEvse = 0
@@ -377,5 +385,7 @@ class ipv6handler():
         self.EvccIp = [ 0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x06, 0x65, 0x65, 0xff, 0xfe, 0, 0x64, 0xC3 ] 
         self.ownMac = self.addressManager.getLocalMacAddress()
         self.faultInjectionSuppressSdpResponse = 0 # can be set to >0 for fault injection. Number of "lost" SDP responses.
+        self.hardwareInterface = None
+        self.LastExiPacket = None
         print("pyPlcIpv6 started with ownMac " + prettyMac(self.ownMac))
 

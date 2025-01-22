@@ -1,8 +1,33 @@
+import time
 
+startTime_ms = round(time.time()*1000)
+
+# milliseconds since startup
+def currentMillis():
+    currentTime_ms = round(time.time()*1000)
+    return currentTime_ms - startTime_ms
 
 def twoCharHex(b):
     strHex = "%0.2X" % b
     return strHex
+
+def arrayEquals(a, b):
+    if a is None:
+        return False
+    if b is None:
+        return False
+
+    aLength = len(a)
+    bLength = len(b)
+
+    if aLength != bLength:
+        return False
+
+    for i in range(0, aLength):
+        if a[i] != b[i]:
+            return False
+    return True
+
 
 def showAsHex(mybytearray, description=""):
     packetlength = len(mybytearray)
