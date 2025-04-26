@@ -8,8 +8,9 @@
 
 import serial # the pyserial
 from serial.tools.list_ports import comports
+from collections import deque
 from time import sleep, time
-from helpers import currentMillis
+from helpers import currentMillis, generate_traceback
 from configmodule import getConfigValue, getConfigValueBool
 import sys # For exit_on_session_end hack
 import subprocess
@@ -78,21 +79,42 @@ RXframeUnknownFrame2   = bytearray([0x09, 0x62, 0xff, 0x02, 0xff, 0x09, 0x62, 0x
 RXframeUnknownFrame3   = bytearray([0x09, 0x62, 0xff, 0x02, 0x29, 0x53, 0x03, 0x1f, 0x00, 0x00])
 
 
+data_lock = threading.Lock()
 
+# TODO: must fix this racy stuff
 shared_data = {
     "battery_voltage": 0.0,
     "battery_current": 0.0,
     "inverter_status": 0,
-    "haas_dcwb_allow_charging": False
+    "haas_dcwb_allow_charging": True,
+    "haas_dcwb_allow_inverter": False,
 }
 
 def _read_inverter_data(mbClient, tracer):
+    subcnt = 0
     while True:
-        shared_data['battery_voltage'] = _inverter_battery_voltage(mbClient, tracer)
-        shared_data['battery_current'] = _inverter_battery_current(mbClient, tracer)
-        shared_data['inverter_status'] = _inverter_status(mbClient, tracer)
+        start_loop = currentMillis()
+        volt = _inverter_battery_voltage(mbClient, tracer)
+        amp = _inverter_battery_current(mbClient, tracer)
+        status = _inverter_status(mbClient, tracer)
+        with data_lock:
+            shared_data['battery_voltage'] = volt
+            shared_data['battery_current'] = amp
+            shared_data['inverter_status'] = status
         _haas_dcwb_allow_charging(tracer)
-        sleep(0.01)
+        _haas_dcwb_allow_inverter(tracer)
+
+        subcnt += 1
+        if subcnt > 60:
+            _haas_dcwb_update_rpi4_temp(tracer)
+            subcnt = 0
+
+        end_loop = currentMillis()
+        iteration_time = end_loop - start_loop
+        if iteration_time > 1000:
+            tracer(f"IO thread: inner loop took longer than 1s: {iteration_time}ms")
+        else:
+            sleep(float(1000 - iteration_time) / 1000)
 
 def _inverter_battery_current(mbClient, tracer):
     try:
@@ -132,10 +154,16 @@ def _haas_dcwb_allow_charging(tracer):
         url = f"{haasURL}/api/states/input_select.dcwb_allow_charging"
         response = requests.get(url, headers=headers, timeout=1)
         if response.status_code == 200:
-            if response.json()['state'] == 'no':
-                shared_data['haas_dcwb_allow_charging'] = False
-            elif response.json()['state'] == 'yes':
-                shared_data['haas_dcwb_allow_charging'] = currentMillis()
+            val = response.json()['state']
+            if val == 'yes':
+                nextval = currentMillis()
+                tracer(f"allow charging should be fine: {nextval}ms")
+                with data_lock:
+                    shared_data['haas_dcwb_allow_charging'] = nextval
+            elif val == 'no' or 'please_restart' in val:
+                tracer("allow charging NOT fine")
+                with data_lock:
+                    shared_data['haas_dcwb_allow_charging'] = False
             else:
                 # do not update
                 pass
@@ -146,6 +174,61 @@ def _haas_dcwb_allow_charging(tracer):
         tracer("Warning: haasDcwbAllowCharging failed!!!!")
         # do not update
         pass
+
+def _haas_dcwb_allow_inverter(tracer):
+    try:
+        haasURL = getConfigValue("homeassistant_url")
+        haasToken = getConfigValue("homeassistant_token")
+
+        headers = {"Authorization": f"Bearer {haasToken}",
+                   "Content-Type": "application/json"}
+
+        url = f"{haasURL}/api/states/input_select.dcwb_allow_inverter"
+        response = requests.get(url, headers=headers, timeout=1)
+        if response.status_code == 200:
+            val = response.json()['state']
+            if val == 'yes':
+                nextval = currentMillis()
+                tracer(f"allow inverter should be fine: {nextval}ms")
+                with data_lock:
+                    shared_data['haas_dcwb_allow_inverter'] = nextval
+            elif val == 'no' or 'please_restart' in val:
+                tracer("allow inverter NOT fine")
+                with data_lock:
+                    shared_data['haas_dcwb_allow_inverter'] = False
+            else:
+                # do not update
+                pass
+        else:
+            # do not update
+            pass
+    except:
+        tracer("Warning: haasDcwbAllowInverter failed!!!!")
+        # do not update
+        pass
+
+def _haas_dcwb_update_rpi4_temp(tracer):
+    try:
+        res = subprocess.run(['vcgencmd', 'measure_temp'], capture_output=True, text=True)
+        s = res.stdout
+        rpi_temp = float(s[s.index('=')+1:s.index('\'')])
+
+        haasURL = getConfigValue("homeassistant_url")
+        haasToken = getConfigValue("homeassistant_token")
+
+        headers = {"Authorization": f"Bearer {haasToken}",
+                   "Content-Type": "application/json"}
+
+        url = f"{haasURL}/api/states/input_number.dcwb_rpi4_temp"
+
+        payload = {"state": rpi_temp}
+        response = requests.post(url, json=payload, headers=headers)
+        if response.status_code == 200:
+            pass
+        else:
+            tracer(f"haas_dcwb_update_rpi4_temp: request failed, status code={response.status_code}")
+    except:
+        tracer(f"haas_dcwb_update_rpi4_temp: some exception")
 
 def _inverter_float32(mbClient, reg):
     rr = mbClient.read_holding_registers(reg, count=2, slave=71)
@@ -234,7 +317,7 @@ class hardwareInterface():
                     self.isSerialInterfaceOk = False
 
     def addToTrace(self, s):
-        self.callbackAddToTrace("[HARDWAREINTERFACE] " + s)            
+        self.callbackAddToTrace(f"[HARDWAREINTERFACE, t=0x{threading.get_ident():08x}] {s}")
 
     def setStateB(self):
         self.addToTrace("Setting CP line into state B.")
@@ -542,13 +625,15 @@ class hardwareInterface():
         if (getConfigValue("digital_output_device")=="kostalinverter"):
             self.stopDCSoft(setState=False)
             sleep(0.05)
-            if shared_data['battery_current'] > 0.2:
-                # one more try...
-                self.stopDCSoft(setState=False)
-                sleep(0.051)
+            with data_lock:
+                if shared_data['battery_current'] > 0.2:
+                    # one more try...
+                    self.stopDCSoft(setState=False)
+                    sleep(0.051)
             # stopDCHard() not required, it's implicitly done by GPIO.cleanup()
             GPIO.cleanup()
             self._inverterConfigureBattery(False)
+            sleep(3)
 
     def evaluateReceivedData_dieter(self, s):
         self.rxbuffer += s
@@ -770,11 +855,14 @@ class hardwareInterface():
             self.startInverterCommunicationTimeStamp = currentMillis()
 
     def _resetInverterStateMachine(self):
-        batCur = shared_data['battery_current']
-        if not (batCur > -0.01 and batCur < 0.01):
-            self.setError(f"wanted to reset inverter state machine, but batCur={batCur}")
-            return
-        self.addToTrace("reset inverter state machine")
+        with data_lock:
+            batCur = shared_data['battery_current']
+            self.addToTrace(f"reset inverter state machine.  inverter_status={shared_data['inverter_status']}, self.startInverterCommunicationTimeStamp={self.startInverterCommunicationTimeStamp}ms")
+        if not (batCur > -0.2 and batCur < 0.2):
+            # self.setError(f"wanted to reset inverter state machine, but batCur={batCur}")
+            # return
+            # TODO: check logs if that happened again after 2024-01-23
+            self.addToTrace(f"wanted to reset inverter state machine, but batCur={batCur}")
         self._setKState(KIState0Idle)
         if self.closedDCPlus or self.closedPrecharge:
             self._setPrecharge(True)
@@ -1135,6 +1223,12 @@ class hardwareInterface():
 
         iKnowWhatIAmDoing = True
 
+        batCur = 0.0
+        batVolt = 0.0
+        with data_lock:
+            batVolt = shared_data['battery_voltage']
+            batCur = shared_data['battery_current']
+
         if self.kState == KIState0Idle:
             if self.closedDCMinus:
                 self.setError("DC- is closed at KIState0Idle")
@@ -1176,12 +1270,10 @@ class hardwareInterface():
                 self.setError("DC- AUX is not closed at KIState1NegativeConfirm")
                 return
 
-            batVol = shared_data['battery_voltage']
-            if batVol > 150 and not iKnowWhatIAmDoing:
-                self.setError("There is voltage during KIState1NegativeConfirm, either DC+ or Prechare welded?! " + str(batVol) + "V")
+            if batVolt > 150 and not iKnowWhatIAmDoing:
+                self.setError("There is voltage during KIState1NegativeConfirm, either DC+ or Prechare welded?! " + str(batVolt) + "V")
                 return
 
-            batCur = shared_data['battery_current']
             if batCur > 0.1 or batCur < -0.1:
                 self.setError("There is current during KIState1NegativeConfirm flowing, should not happen " + str(batCur) + "A")
                 return
@@ -1195,12 +1287,10 @@ class hardwareInterface():
                 self.setError("Precharge is not closed at KIState2PrechargeConfirm")
                 return
 
-            batVol = shared_data['battery_voltage']
-            if batVol < 150 and not iKnowWhatIAmDoing:
-                self.setError("There is no voltage during KIState2PrechargeConfirm, circuit breaker to inverter not closed? " + str(batVol) + "V")
+            if batVolt < 150 and not iKnowWhatIAmDoing:
+                self.setError("There is no voltage during KIState2PrechargeConfirm, circuit breaker to inverter not closed? " + str(batVolt) + "V")
                 return
 
-            batCur = shared_data['battery_current']
             if batCur > 0.1 or batCur < -0.1:
                 self.setError("There is current during KIState2PrechargeConfirm flowing, should not happen " + str(batCur) + "A")
                 return
@@ -1215,9 +1305,8 @@ class hardwareInterface():
                 self.setError("DC+ is not closed at KIState3PositiveConfirm")
                 return
 
-            batVol = shared_data['battery_voltage']
-            if batVol < 10 and not isinstance(self.inverterComm, FakeKostalInverter):
-                self.setError("There is no voltage during KIState3PositiveConfirm. but voltage seen during precharge, weird? " + str(batVol) + "V")
+            if batVolt < 10 and not isinstance(self.inverterComm, FakeKostalInverter):
+                self.setError("There is no voltage during KIState3PositiveConfirm. but voltage seen during precharge, weird? " + str(batVolt) + "V")
                 return
 
             # batCur = self.inverter_battery_current()
@@ -1320,21 +1409,57 @@ class hardwareInterface():
         if (getConfigValue("digital_output_device")!="kostalinverter"):
             return
 
-        val = shared_data['haas_dcwb_allow_charging']
+        tries = 0
+        while tries < 4:
+            val = False
+            with data_lock:
+                val = shared_data['haas_dcwb_allow_charging']
 
-        if val is False:
-            return False
+            if val is True:
+                return True
+            if val is False:
+                return False
 
-        if currentMillis() - val < 35 * 1000:
-            # allow up to 35s, could be a HAAS restart
-            return True
+            diff = currentMillis() - val
+            if diff < 120 * 1000:
+                # allow up to 35s, could be a HAAS restart
+                return True
+            self.addToTrace(f"haasDcwbAllowCharging: TIMEOUT of 120s hit, {val}ms vs. {currentMillis()}ms -> diff={diff}ms")
+            sleep(0.005) # 5ms
+            tries += 1
+        return False
+
+    def haasDcwbAllowInverter(self):
+        if (getConfigValue("digital_output_device")!="kostalinverter"):
+            return
+
+        tries = 0
+        while tries < 4:
+            val = False
+            with data_lock:
+                val = shared_data['haas_dcwb_allow_inverter']
+
+            if val is True:
+                return True
+            if val is False:
+                return False
+
+            diff = currentMillis() - val
+            if diff < 120 * 1000:
+                # allow up to 35s, could be a HAAS restart
+                return True
+            self.addToTrace(f"haasDcwbAllowInverter: TIMEOUT of 120s hit, {val}ms vs. {currentMillis()}ms -> diff={diff}ms")
+            sleep(0.005) # 5ms
+            tries += 1
         return False
 
     def stopDCSoft(self, setState=True):
         if (getConfigValue("digital_output_device")!="kostalinverter"):
             return
 
-        self.addToTrace("stopDCSoft()")
+        if setState:
+            # TODO: logging does not work anymore on finally block in main event loop
+            self.addToTrace("stopDCSoft()")
         self._disableInverterCommunication()
         self.stopPrecharge()
         if self.closedDCPlus or self.closedPrecharge:
