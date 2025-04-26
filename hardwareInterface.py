@@ -25,24 +25,31 @@ from pymodbus.constants import Endian
 PinCp = "P8_18"
 PinPowerRelay = "P8_16"
 
-
-
 ###### DIY DC Wallbox with Kostal Plenticore inverter #####
+
+# 4 ... BYD
+battery_type = 4
+bat_Ah = struct.pack('f', 185.0) # Ah
+
+# 4096 ... Dyness Tower
+# battery_type = 4096
+# bat_Ah = struct.pack('f', 37.0)
 
 # BCM (WiringPi) numbering
 # out
-KICp = 26 # (25)
+KICp = 23 # (4)
 KIContactorPrecharge = 19 # (24)
 KIContactorDCMinus = 13 # (23)
 KIContactorDCPlus = 6 # (22)
-KIPWMStepup = 18 # (1)
+KIPWMStepup = 12 # (1)
 
 # in
 KIContactorPrechargeAUX = None
 KIContactorDCMinusAUX = 8 # (10)
 KIContactorDCPlusAUX = None
 
-KIInverterSerial = "/dev/ttyACM0"
+# KIInverterSerial = "/dev/ttyACM0"
+KIInverterSerial = "/dev/serial/by-id/usb-1a86_USB_Single_Serial_586D005220-if00"
 KIInverterBaud = 56000
 
 KIState0Idle = 0
@@ -59,6 +66,7 @@ RXframeCyclicData      = bytearray([0x09, 0x62, 0xFF, 0x02, 0xFF, 0x29, 0x4A, 0x
 RXframeBatteryInfo     = bytearray([0x09, 0x62, 0xFF, 0x02, 0xFF, 0x29, 0x4A, 0x08, 0x23, 0x00])
 RXframeErrorState      = bytearray([0x09, 0x62, 0xFF, 0x02, 0xFF, 0x29, 0x53, 0x03, 0x1F, 0x00])
 RXframeRestartFrame    = bytearray([0x09, 0x62, 0xFF, 0x02, 0xFF, 0x29, 0x5E, 0xFF, 0x17, 0x00])
+RXframeRestartFrame2   = bytearray([0x09, 0x63, 0xFF, 0x02, 0xFF, 0x29, 0x5E, 0xFF, 0x17, 0x00])
 RXframeCloseContactors = bytearray([0x07, 0x63, 0xFF, 0x02, 0xFF, 0x29, 0x5E, 0x02, 0x16, 0x00])
 
 # maybe a hint to restart the state machine?
@@ -67,8 +75,7 @@ RXframeUnknownFrame1   = bytearray([0x09, 0x63, 0xff, 0x02, 0xff, 0x29, 0x5e, 0x
 RXframeUnknownFrame2   = bytearray([0x09, 0x62, 0xff, 0x02, 0xff, 0x09, 0x62, 0xff, 0x12, 0xff])
 
 # ??? seen in a long session after 5745596ms.  maybe fucked up byte, and should be RXframeErrorState?
-RXframeUnknownFrame2   = bytearray([0x09, 0x62, 0xff, 0x02, 0x29, 0x53, 0x03, 0x1f, 0x00, 0x00])
-
+RXframeUnknownFrame3   = bytearray([0x09, 0x62, 0xff, 0x02, 0x29, 0x53, 0x03, 0x1f, 0x00, 0x00])
 
 
 
@@ -309,6 +316,10 @@ class hardwareInterface():
             # bei 5.1V Eingangsspannung (USB Netzteil)
             freqSettings = [
                       25, #kHz ~298V
+                      2, #kHz ~298V
+                      5, #kHz ~298V
+                      10, #kHz ~298V
+                      15, #kHz ~298V
                       55, #kHz ~355V
                       65, #kHz ~369V
                       80, #kHz ~380V
@@ -424,10 +435,14 @@ class hardwareInterface():
             for outpin in [KIPWMStepup]:
                 if outpin is not None:
                     GPIO.setup(outpin, GPIO.OUT, initial=GPIO.LOW)
-                    self.stepUpPWM = GPIO.PWM(18, 10)
+                    self.stepUpPWM = GPIO.PWM(KIPWMStepup, 10)
+
+            for outpin in [KICp]:
+                if outpin is not None:
+                    GPIO.setup(outpin, GPIO.OUT, initial=GPIO.LOW)
 
             # HAT relais are active-low
-            for outpin in [KICp, KIContactorPrecharge, KIContactorDCMinus, KIContactorDCPlus]:
+            for outpin in [KIContactorPrecharge, KIContactorDCMinus, KIContactorDCPlus]:
                 if outpin is not None:
                     GPIO.setup(outpin, GPIO.OUT, initial=GPIO.HIGH)
 
@@ -446,7 +461,6 @@ class hardwareInterface():
         self.homeplughandler = homeplughandler
         if inverterComm is None:
             if (getConfigValue("digital_output_device")=="kostalinverter"):
-                # self.inverterComm = serial.Serial(KIInverterSerial, baudrate=KIInverterBaud, timeout=0.2, write_timeout=0)
                 self.inverterComm = serial.Serial(KIInverterSerial, baudrate=KIInverterBaud, write_timeout=0)
         else:
             self.inverterComm = inverterComm
@@ -460,7 +474,7 @@ class hardwareInterface():
         self.accuVoltage = 0.0
         self.lock_confirmed = False  # Confirmation from hardware
         self.cp_pwm = 0.0
-        self.soc_percent = 0.0
+        self.soc_percent = int(0.0)
         self.capacity = 0.0
         self.accuMaxVoltage = 0.0
         self.accuMaxCurrent = 0.0
@@ -491,12 +505,18 @@ class hardwareInterface():
         self.allowInverterCommunication = False
         self.startInverterCommunication = False
         self.startInverterCommunicationTimeStamp = None
+        self.seenUnknownFrame1 = 0
+        self.seenRestartFrame = 0
+        self.inverterHaveSeenCurrent = False
+        self.lastHaasDcwbAllowInverter = 0
+        self.sinceStatus6 = None
         self.mbClient = None
         self.lastPrechargeVoltage = currentMillis()
         self.stepUpPWMIndex = 0
         self.stepUpPWM = None
         self.lastTargetVoltage = 44.0
         self._inverterConfigureBattery(False)
+        self.averageCurrent = deque(maxlen=60)
 
         self.closedCp = False
         self.closedDCMinus = False
@@ -763,8 +783,14 @@ class hardwareInterface():
         sleep(0.03) # 30ms
         self._setPrecharge(False)
         self._setDCMinus(False)
-        self.inverterComm.reset_input_buffer()
+        if self.inverterComm is not None:
+            self.inverterComm.reset_input_buffer()
         self.startInverterCommunicationTimeStamp = None
+        self.seenUnknownFrame1 = 0
+        self.seenRestartFrame = 0
+        self.inverterHaveSeenCurrent = False
+        self.sinceStatus6 = None
+        self.averageCurrent.clear()
 
     # kostalinverter config
     def mainfunction_kostalinverter(self):
@@ -774,12 +800,91 @@ class hardwareInterface():
         if not self.startInverterCommunication:
             return
 
+        inverter_status = 0
+        batCur = 0.0
+        batVolt = 0.0
+        with data_lock:
+            # 0 = off
+            # 6 = feedin
+            inverter_status = int(shared_data['inverter_status'])
+
+            batVolt = shared_data['battery_voltage']
+            batCur = shared_data['battery_current']
+
+        if self.sinceStatus6 is None and inverter_status == 6:
+            self.sinceStatus6 = currentMillis()
+        elif inverter_status != 6:
+            self.sinceStatus6 = None
+
+        # TODO: check for running average
+        if not self.inverterHaveSeenCurrent and (batCur < -0.5 or batCur > 0.5):
+            self.addToTrace(f"inverterHaveSeenCurrent: {batCur:.5f}A")
+            self.inverterHaveSeenCurrent = True
+
         #  70s worked.
         # 140s worked.
-        if self.startInverterCommunicationTimeStamp is not None and currentMillis() - self.startInverterCommunicationTimeStamp > 70 * 1000:
-            if shared_data['inverter_status'] == 0 or (not self.closedDCPlus and not self.closedPrecharge):
-                self._resetInverterStateMachine()
-                return
+        timeToReset55 = self.startInverterCommunicationTimeStamp is not None and currentMillis() - self.startInverterCommunicationTimeStamp > 55 * 1000
+        timeToReset70 = self.startInverterCommunicationTimeStamp is not None and currentMillis() - self.startInverterCommunicationTimeStamp > 70 * 1000
+        timeToReset140 = self.startInverterCommunicationTimeStamp is not None and currentMillis() - self.startInverterCommunicationTimeStamp > 140 * 1000
+
+        injectCRCError = False
+
+        # allow toggling inverter communication via Home Assistant
+        currentHaasDcwbAllowInverter = self.haasDcwbAllowInverter()
+        nextLastAllowInverter = self.lastHaasDcwbAllowInverter
+        situation0 = False
+
+        allowCnt = int(50 * int(1000 / 70))
+        if not currentHaasDcwbAllowInverter:
+            if self.lastHaasDcwbAllowInverter > allowCnt:
+                situation0 = True
+            elif self.lastHaasDcwbAllowInverter >= allowCnt:
+                situation0 = True
+                nextLastAllowInverter += 1
+            else:
+                injectCRCError |= True
+                nextLastAllowInverter += 1
+        else:
+            nextLastAllowInverter = 0
+
+
+        # TODO: figure out meaning of unknownFrame1
+        situation1 = self.seenUnknownFrame1 >= 2
+
+        # no PV power there
+        situation2 = inverter_status == 0 and (not self.inverterHaveSeenCurrent) and timeToReset70
+
+        status6_50s = self.sinceStatus6 is not None and (currentMillis() - self.sinceStatus6) > 50 * 1000
+        # PV power there on battery connect, thus inverter is in feedin state
+        situation3  = status6_50s and (not self.inverterHaveSeenCurrent) and timeToReset70
+
+        injectCRCError |= status6_50s and (not self.inverterHaveSeenCurrent) and timeToReset55
+
+        # dunno remember
+        situation4 = (not self.closedDCPlus and not self.closedPrecharge) and timeToReset70
+
+        situation5 = self.seenRestartFrame >= 3
+
+        if situation0 or situation1 or situation2 or situation3 or situation5:
+            self.addToTrace(f"reset: s0={situation0}, s1={situation1}, s2={situation2}, s3={situation3}, s4={situation4}, s5={situation5}, self.lastHaasDcwbAllowInverter={self.lastHaasDcwbAllowInverter}")
+            self._resetInverterStateMachine()
+
+            # turn off battery support
+            if self.lastHaasDcwbAllowInverter == allowCnt and not currentHaasDcwbAllowInverter:
+                self._inverterConfigureBattery(False)
+                self.inverterComm.close()
+                self.inverterComm = None
+            self.lastHaasDcwbAllowInverter = nextLastAllowInverter
+
+            return
+
+        # turn on battery support
+        if self.lastHaasDcwbAllowInverter > 0 and currentHaasDcwbAllowInverter:
+            self._inverterConfigureBattery(True)
+            if self.inverterComm is not None:
+                self.addToTrace("BUG: expected inverterComm to be None")
+            self.inverterComm = serial.Serial(KIInverterSerial, baudrate=KIInverterBaud, write_timeout=0)
+        self.lastHaasDcwbAllowInverter = nextLastAllowInverter
 
         frame = None
         if self.inverterComm.in_waiting > 0:
@@ -812,15 +917,19 @@ class hardwareInterface():
             self.setError(f"wtf RX frame: {hex_string}")
             return
 
+        currentAverage = float(sum(self.averageCurrent)) / len(self.averageCurrent) if len(self.averageCurrent) > 0 else 0.0
+        currentPeak = max(self.averageCurrent, key=abs) if len(self.averageCurrent) > 0 else 0.0
+
         isCyclicData = frame == RXframeCyclicData
         isBatteryInfo = frame == RXframeBatteryInfo
         isErrorState = frame == RXframeErrorState
         isRestartFrame = frame == RXframeRestartFrame
+        isRestartFrame2 = frame == RXframeRestartFrame2
         isCloseContactors = frame == RXframeCloseContactors
         isUnknownFrame1 = frame == RXframeUnknownFrame1
 
-        rxStr = "CyclicData" if isCyclicData else "BatteryInfo" if isBatteryInfo else "ErrorState" if isErrorState else "RestartFrame" if isRestartFrame else "CloseContactors" if isCloseContactors else "UnknownFrame1" if isUnknownFrame1 else "???"
-        self.addToTrace(f"RX: {rxStr}")
+        rxStr = "CyclicData" if isCyclicData else "BatteryInfo" if isBatteryInfo else "ErrorState" if isErrorState else "RestartFrame" if isRestartFrame else "RestartFrame2" if isRestartFrame2 else "CloseContactors" if isCloseContactors else "UnknownFrame1" if isUnknownFrame1 else "???"
+        self.addToTrace(f"RX {batVolt:.1f}V / {batCur:.1f}A / avg={currentAverage:.1f}A / peak={currentPeak:.1f}A / S={inverter_status} / ihsc={self.inverterHaveSeenCurrent}: {rxStr}")
         if rxStr == "???":
             hex_string = " ".join(f"0x{b:02x}" for b in frame)
             # TODO: make it an error?
@@ -834,24 +943,59 @@ class hardwareInterface():
             outframe = bytearray(40)
             # header
             outframe[0:6] = bytearray([0x00, 0xE2, 0xFF, 0x02, 0xFF, 0x29])
-            # nominal voltage
-            outframe[6:10] = struct.pack('f', 380.5)
+            # nominal voltage.
+            outframe[6:10] = struct.pack('f', 366.0)
             # outframe[6:10] = bytearray([0x00, 0x00, 0xa2, 0x43]) # with that the checksum should be 0x2b
 
-            # manufacture date ?
-            outframe[10:14] = bytearray([0xE4, 0x70, 0x8A, 0x5C])
-            # serial number ?
-            outframe[14:18] = bytearray([0xB5, 0x00, 0xD3, 0x00])
-            # 0x10b4
-            outframe[18:22] = bytearray([0x00, 0x00, 0xC8, 0x41])
-            # battery firmware
-            outframe[22:24] = bytearray([0xC2, 0x18])
-            # ???
-            outframe[24:28] = bytearray([0x00, 0x00, 0x59, 0x42])
-            # ???
-            outframe[28:32] = bytearray([0x00, 0x00, 0x00, 0x00])
-            # ???
-            outframe[32:38] = bytearray([0x05, 0x00, 0xA0, 0x00, 0x00, 0x00])
+            if battery_type == 4: # BYD
+                # manufacture date ?
+                outframe[10:14] = bytearray([0xE4, 0x70, 0x8A, 0x5C])
+                # serial number ?
+                outframe[14:18] = bytearray([0xB5, 0x00, 0xD3, 0x00])
+
+                # 0x10b4, battery capacity in Ah (float32)
+                # +0x504 in BMU-P3
+                outframe[18:22] = bat_Ah
+
+                # battery firmware
+                outframe[22:24] = bytearray([0xC2, 0x18])
+
+                # vendor
+                # 'YB'/0x59 0x42 -> BYD
+                # 'YD'/0x59 0x44 -> Dyness)
+                outframe[24:28] = bytearray([0x00, 0x00, 0x59, 0x42])   # 0x42 == 'B', 0x59 == 'Y'
+                # ???
+                outframe[28:30] = bytearray([0x00, 0x00])
+                # maybe amount of parallel blocks? (ushort)
+                outframe[30:32] = bytearray([0x03, 0x00])
+                # amount of blocks
+                outframe[32] = 0x05
+                # ???
+                outframe[33:38] = bytearray([0x00, 0xA0, 0x00, 0x00, 0x00])
+            elif battery_type == 4096: # Dyness
+                # manufacture date ?
+                outframe[10:14] = bytearray([0x33, 0x86, 0x3f, 0x41])
+                # serial number ?
+                outframe[14:18] = bytearray([0xff, 0xff, 0xff, 0xff])
+
+                # bat amp hour, 37.0 Ah
+                outframe[18:22] = bat_Ah
+
+                # battery firmware
+                outframe[22:26] = bytearray([0x19, 0x01, 0x01, 0x00])
+
+                # vendor
+                # 'YD'/0x59 0x44 -> Dyness)
+                outframe[26:28] = bytearray([0x59, 0x44])
+                # ???
+                outframe[28:30] = bytearray([0x00, 0x00])
+                # maybe amount of parallel blocks? (ushort)
+                outframe[30:32] = bytearray([0x05, 0x00])
+                # amount of blocks
+                outframe[32:34] = bytearray([0x05, 0x00])
+                # ???
+                outframe[34:38] = bytearray([0xA0, 0x64, 0xff, 0xff])
+
             # CRC
             outframe[38] = self._calcFrameCRC(outframe, 38)
             # terminating NUL byte
@@ -863,8 +1007,11 @@ class hardwareInterface():
             self._sendFrameToInverter(bytearray([0x00, 0xE2, 0xFF, 0x02, 0xFF, 0x29, 0x06, 0xEF, 0x00]))
             return
 
-        if isRestartFrame:
-            self.setError("Restart Frame received, do not know what to do. PANIC")
+        if isRestartFrame or isRestartFrame2:
+            # ACK it
+            self._sendFrameToInverter(bytearray([0x00, 0xE3, 0xFF, 0x02, 0xFF, 0x29, 0xF4, 0x00]))
+
+            self.seenRestartFrame += 1
             return
 
         if isCloseContactors:
@@ -878,28 +1025,41 @@ class hardwareInterface():
         if isUnknownFrame1:
             # ACK it
             self._sendFrameToInverter(bytearray([0x00, 0xE3, 0xFF, 0x02, 0xFF, 0x29, 0xF4, 0x00]))
+
+            # hrm... does not work
+            # self.seenUnknownFrame1 += 1
             return
 
         if isCyclicData:
+            # cyclicData is roughly once a second, so update average list once a second roughly
+            self.averageCurrent.append(float(batCur) * -1.0) # view is inverted
+
+            soc = int(self.soc_percent)
+            maxChargeCurrent    = 30.0 if soc < 95 else 8.0
+            maxDischargeCurrent = 30.0 if soc >  5 else 8.0
+
             outframe = bytearray(64)
             # frame header
             outframe[0:6] = bytearray([0x00, 0xE2, 0xFF, 0x02, 0xFF, 0x29])
             # current voltage
-            outframe[6:10] = struct.pack('f', self.lastTargetVoltage)
+            voltage = batVolt if batVolt > 300 else self.lastTargetVoltage
+            outframe[6:10] = struct.pack('f', voltage)
             # max voltage
-            outframe[10:14] = struct.pack('f', 422.2)
+            outframe[10:14] = struct.pack('f', 422.0)
             # battery temp
             outframe[14:18] = struct.pack('f', 14.0)
             # peak current
-            outframe[18:22] = struct.pack('f', 1.0)
+            outframe[18:22] = struct.pack('f', currentPeak if self.kState > KIState1NegativeConfirm else 0.0)
             # avg current
-            outframe[22:26] = struct.pack('f', 0.5)
+            outframe[22:26] = struct.pack('f', currentAverage if self.kState > KIState1NegativeConfirm else 0.0)
             # max discharge current
-            outframe[26:30] = struct.pack('f', 13.0 if self.kState > KIState1NegativeConfirm else 0.0)
-            # something capacity related
-            outframe[30:34] = bytearray([0x00, 0x00, 0xC8, 0x41])
+            outframe[26:30] = struct.pack('f', maxDischargeCurrent if self.kState > KIState1NegativeConfirm else 0.0)
+
+            # something capacity related (maps to SunSpec Charge Capacity)
+            outframe[30:34] = bat_Ah
+
             # max charge current
-            outframe[34:38] = struct.pack('f', 13.0 if self.kState > KIState1NegativeConfirm else 0.0)
+            outframe[34:38] = struct.pack('f', maxChargeCurrent if self.kState > KIState1NegativeConfirm else 0.0)
 
             # max cell temp
             outframe[38:42] = struct.pack('f', 22.0 if self.kState > KIState0IdlePrime else 0.0)
@@ -920,8 +1080,8 @@ class hardwareInterface():
             # TODO: should be 0x40 if SoC is at 100%
             outframe[57] = 0x00
 
-            # SoC (TODO)
-            outframe[58] = 55
+            # SoC
+            outframe[58] = soc
 
             # "operate flag"?
             outframe[59] = 0x00 if self.kState != KIState4Operate else 0x02
@@ -930,9 +1090,15 @@ class hardwareInterface():
             outframe[60] = 0x00
 
             # only set on the very first time this frame is sent
-            outframe[61] = 0x00 if self.kState > KIState0IdlePrime else 0x01
+            outframe[61] = 0x00 if (self.kState > KIState0IdlePrime or inverter_status == 6) else 0x01
 
-            outframe[62] = self._calcFrameCRC(outframe, 62)
+            crc = self._calcFrameCRC(outframe, 62)
+            if not injectCRCError:
+                outframe[62] = crc
+            else:
+                self.addToTrace("inject CRC error in CyclicData")
+                # inject communication error, hopefully trips up the inverter and transitions into Off state?
+                outframe[62] = 1 if crc == 0 else crc - 1
             # terminating NUL byte
             outframe[63] = 0x00
             self._sendFrameToInverter(outframe)
@@ -988,14 +1154,13 @@ class hardwareInterface():
 
             self._setKState(KIState1Negative)
         elif self.kState == KIState0IdlePrime:
-            batCur = shared_data['battery_current']
             if batCur > 0.1 or batCur < -0.1:
                 self.setError("There is current during KIState0IdlePrime flowing, should not happen " + str(batCur) + "A")
                 return
 
             self._setDCMinus(False)
             self._setDCPlus(False)
-            self._setDCPrecharge(False)
+            self._setPrecharge(False)
 
             self._setKState(KIState1Negative)
         elif self.kState == KIState1Negative:
@@ -1071,6 +1236,7 @@ class hardwareInterface():
             if self.closedPrecharge:
                 self.setError("Precharge is closed at KIState4Operate")
                 return
+            self.stopPrecharge()
         else:
             self.setError("invalid state: " + str(self.kState))
             return
@@ -1113,7 +1279,7 @@ class hardwareInterface():
             '--password', kostalPassword,
             '--service-code', kostalServicecode,
             'write-settings',
-            'devices:local/Battery:Type=' + ('4' if enabled else '0')
+            'devices:local/Battery:Type=' + (str(battery_type) if enabled else '0')
             ])
 
     def haasDcwbEvseState(self, next_state):
@@ -1171,7 +1337,8 @@ class hardwareInterface():
         self.addToTrace("stopDCSoft()")
         self._disableInverterCommunication()
         self.stopPrecharge()
-        self._setPrecharge(True)
+        if self.closedDCPlus or self.closedPrecharge:
+            self._setPrecharge(True)
         # command inverter via ModBus to draw zero power from battery
         kostalIP = getConfigValue("kostalinverter_url")
         # really is reg=1034, off-by-one via `mbpoll`
@@ -1217,11 +1384,11 @@ class hardwareInterface():
         self.closedPrecharge = val
 
     def _setCp(self, val):
-        # TODO: maybe inverted?
-        GPIO.output(KICp, GPIO.LOW if val is True else GPIO.HIGH)
+        GPIO.output(KICp, GPIO.HIGH if val is True else GPIO.LOW)
         shouldWait = False
         if self.closedCp != val:
             self.addToTrace(f"relay: CP from {self.closedCp} to {val}")
+            self.addToTrace(generate_traceback())
         if not self.closedCp and val:
             shouldWait = True
         self.closedCp = val
