@@ -1,0 +1,11 @@
+[Unit]
+Description=Start Tmux session on boot
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -lc '%h/tmux.sh'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
+
