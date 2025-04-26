@@ -15,6 +15,7 @@ import time # for time.sleep()
 import errno
 import os
 import subprocess
+import threading
 from configmodule import getConfigValue, getConfigValueBool
 
 class pyPlcTcpClientSocket():
@@ -29,7 +30,7 @@ class pyPlcTcpClientSocket():
         self.rxData = []
 
     def addToTrace(self, s):
-        self.callbackAddToTrace(s)
+        self.callbackAddToTrace(f"[TCPClient, t=0x{threading.get_ident():08x}] {s}")
         
     def connect(self, host, port):
         try:
@@ -191,7 +192,7 @@ class pyPlcTcpServerSocket():
         self.rxData = []
         
     def addToTrace(self, s):
-        self.callbackAddToTrace(s)
+        self.callbackAddToTrace(f"[TCPServer, t=0x{threading.get_ident():08x}] {s}")
 
     def isRxDataAvailable(self):
         return (len(self.rxData)>0)

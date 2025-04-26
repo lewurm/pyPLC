@@ -1,4 +1,11 @@
 import time
+import traceback
+
+def generate_traceback():
+    # Capture the current stack, excluding this function's frame
+    stack = traceback.extract_stack()[:-1]
+    # Format the stack into a traceback string
+    return ''.join(traceback.format_list(stack))
 
 startTime_ms = round(time.time()*1000)
 

@@ -6,7 +6,8 @@
 
 import pyPlcTcpSocket
 import time # for time.sleep()
-from helpers import prettyHexMessage, combineValueAndMultiplier, currentMillis
+import threading
+from helpers import prettyHexMessage, combineValueAndMultiplier, currentMillis, generate_traceback
 from mytestsuite import *
 from random import random
 from exiConnector import * # for EXI data handling/converting
@@ -23,7 +24,7 @@ stateWaitForPowerDeliveryRequest = 8
 
 class fsmEvse():
     def addToTrace(self, s):
-        self.callbackAddToTrace("[EVSE] " + s)
+        self.callbackAddToTrace(f"[EVSE, t=0x{threading.get_ident():08x}] {s}")
 
     def publishStatus(self, s):
         self.callbackShowStatus(s, "evseState")
@@ -45,7 +46,16 @@ class fsmEvse():
             # typically 25-50ms
             # 150ms: seems fine
             # 110ms: TODO: document results
-            return (currentMillis() - self.lastCurrentDemandReq) > 110
+            threshold = 150
+            diff = (currentMillis() - self.lastCurrentDemandReq)
+            if diff > threshold:
+                self.addToTrace(f"SAFETY TIMEOUT (1) triggered, {currentMillis()}ms vs. {self.lastCurrentDemandReq}ms -> {diff}ms")
+                time.sleep(0.005) # 5ms
+                # try one more...
+                diff = (currentMillis() - self.lastCurrentDemandReq)
+                if diff > threshold:
+                    self.addToTrace(f"SAFETY TIMEOUT (2) triggered, {currentMillis()}ms vs. {self.lastCurrentDemandReq}ms -> {diff}ms")
+                    return True
         return False
 
     def isTooLong(self):
@@ -68,12 +78,14 @@ class fsmEvse():
         if not self.hardwareInterface.haasDcwbAllowCharging():
             self.hardwareInterface._setCp(False)
             self.hardwareInterface.haasDcwbEvseState("disconnected")
+            self.doneChargingSessions += 1
             time.sleep(0.5)
             return
         elif self.hardwareInterface.hasError():
             self.hardwareInterface._setCp(False)
             self.addToTrace("hardwareInterface broken: " + str(self.hardwareInterface.errorState))
             self.hardwareInterface.haasDcwbEvseState("error")
+            self.doneChargingSessions += 1
             time.sleep(0.5)
             return
         else:
@@ -83,19 +95,29 @@ class fsmEvse():
             self.blChargeStopTrigger = 0
 
         if self.hardwareInterface.closedDCMinus:
+            self.doneChargingSessions += 1
             self.hardwareInterface.setError("DC- is closed at session start")
             return
 
         if self.hardwareInterface.closedDCPlus:
+            self.doneChargingSessions += 1
             self.hardwareInterface.setError("DC+ is closed at session start")
             return
 
         if self.hardwareInterface.closedPrecharge:
+            self.doneChargingSessions += 1
             self.hardwareInterface.setError("Precharge is closed at session start")
             return
 
         if not self.hardwareInterface.closedCp:
+            self.doneChargingSessions += 1
             self.hardwareInterface.setError("CP is not closed at session start")
+            return
+
+        # Handle timeout
+        if self.cyclesInState > 120: #around 18s
+            self.doneChargingSessions += 1
+            self.hardwareInterface.setError("No car detected")
             return
 
         if (len(self.rxData)>0):
@@ -397,6 +419,7 @@ class fsmEvse():
                     self.publishSoCs(current_soc, full_soc, energy_capacity, energy_request, origin="CurrentDemandReq")
 
                     self.callbackShowStatus(str(current_soc), "soc")
+                    self.hardwareInterface.soc_percent = int(current_soc)
                     self.callbackShowStatus(str(uTarget) + "V, " + str(iTarget) + "A", "UandI")
 
                 except:
@@ -582,6 +605,7 @@ class fsmEvse():
         self.stateFunctions[self.state](self)
 
     def stopCharging(self):
+        self.addToTrace(generate_traceback())
         self.blChargeStopTrigger = 1
 
 

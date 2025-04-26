@@ -45,6 +45,7 @@ from random import random
 from configmodule import getConfigValue, getConfigValueBool
 from datetime import datetime
 import sys
+import threading
 
 MAC_BROADCAST = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF ]
 
@@ -770,6 +771,7 @@ class pyPlcHomeplug():
         # If we are EVSE, we send the response.
         self.addToTrace("received SLAC_MATCH.REQ")
         if (self.iAmEvse==1):
+            # TODO: try to resend if there is no response?
             self.showStatus("SLAC match", "evseState")
             self.composeSlacMatchCnf()
             self.addToTrace("[EVSE] transmitting SLAC_MATCH.CNF")
@@ -1249,7 +1251,7 @@ class pyPlcHomeplug():
         print("sniffer created at " + self.strInterfaceName) # we use print, because addToLog does not yet work at this stage in the init.
 
     def addToTrace(self, s):
-        self.callbackAddToTrace(s)
+        self.callbackAddToTrace(f"[HomePlug, t=0x{threading.get_ident():08x}] {s}")
 
     def showStatus(self, s, selection=""):
         self.callbackShowStatus(s, selection) 

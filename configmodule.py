@@ -29,9 +29,20 @@ def getConfigValueBool(s):
         sys.exit()
 
 if __name__ == "__main__":
-    print("Testing configmodule...")
-    print(str(config.sections()))
-    print(config['general']['mode'])
-    for key in config['general']:
-        print(key + " has value " + config['general'][key])
-    print(config.getboolean('general', 'display_via_serial'))
+    if len(sys.argv) <= 1:
+        print("pass key to lookup", file=sys.stderr)
+        exit(1)
+
+    if sys.argv[1] == "test":
+        print("Testing configmodule...")
+        print(str(config.sections()))
+        print(config['general']['mode'])
+        for key in config['general']:
+            print(key + " has value " + config['general'][key])
+        print(config.getboolean('general', 'display_via_serial'))
+    else:
+        if sys.argv[1] not in config['general']:
+            print(f"key \"{sys.argv[1]}\" not found in pyPlc.ini", file=sys.stderr)
+            exit(2)
+
+        print(config['general'][sys.argv[1]])
