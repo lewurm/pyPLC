@@ -88,7 +88,8 @@ class pyPlcWorker():
         if hwMainTimeSpent > 100:
             self.workerAddToTrace(f"[timing] HW mainfunction took too long: {hwMainTimeSpent}ms")
         if (self.mode == C_EVSE_MODE):
-            if (self.nMainFunctionCalls>8*33): # ugly. Wait with EVSE high level handling, until the modem restarted.
+            # if (self.nMainFunctionCalls>12*33): # ugly. Wait with EVSE high level handling, until the modem restarted.
+            if (self.nMainFunctionCalls>7*33): # ugly. Wait with EVSE high level handling, until the modem restarted.
                 self.evse.mainfunction() # call the evse state machine
         if (self.mode == C_PEV_MODE):
             self.pev.mainfunction() # call the pev state machine
