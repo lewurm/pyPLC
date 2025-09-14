@@ -377,7 +377,7 @@ mode: single
 
 ```
 $ sudo sysctl net.ipv6.conf.eth0.keep_addr_on_down=1
-$ sudo setcap cap_net_raw=eip `realpath $(which python3)`
+$ sudo setcap cap_net_raw,cap_net_admin=eip `realpath $(which python3)`
 $ sudo sysctl -w net.ipv6.conf.eth0.accept_ra=1
 $ sudo apt install mbpoll
 ```
