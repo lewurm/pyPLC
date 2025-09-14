@@ -3,7 +3,7 @@ Description=Start Tmux session on boot
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -lc '%h/tmux.sh'
+ExecStart=/bin/bash -lc '%h/private/pyPLC/tmux.sh'
 RemainAfterExit=yes
 
 [Install]

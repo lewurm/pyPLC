@@ -5,11 +5,13 @@ URL=`cd ~/private/pyPLC && python3 configmodule.py homeassistant_url`
 TOKEN=`cd ~/private/pyPLC && python3 configmodule.py homeassistant_token`
 PLCMAC='28:EE:52:E3:4E:FF'
 
+source ~/private/pyPLC/myenv/bin/activate
+
 while sleep 2; do
     ctrl=`curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" $URL/api/states/input_select.dcwb_allow_charging | jq '.state == "yes"'`
     if test xtrue '==' x"$ctrl"; then
         (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0 -R $PLCMAC ) &
-        python break-pp.py
+        (cd ~/private/pyPLC && python break-pp.py)
         (cd ~/private/pyPLC && bash -x ./starter.sh)
         (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0 -R $PLCMAC ) &
         sleep 10
