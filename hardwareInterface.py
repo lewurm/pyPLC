@@ -232,12 +232,12 @@ def _haas_dcwb_update_rpi4_temp(tracer):
 
 def _inverter_float32(mbClient, reg):
     rr = mbClient.read_holding_registers(reg, count=2, slave=71)
-    decoder = BinaryPayloadDecoder.fromRegisters(rr.registers, byteorder=Endian.Big, wordorder=Endian.Little)
+    decoder = BinaryPayloadDecoder.fromRegisters(rr.registers, byteorder=Endian.BIG, wordorder=Endian.LITTLE)
     return decoder.decode_32bit_float()
 
 def _inverter_uint32(mbClient, reg):
     rr = mbClient.read_holding_registers(reg, count=2, slave=71)
-    decoder = BinaryPayloadDecoder.fromRegisters(rr.registers, byteorder=Endian.Big, wordorder=Endian.Little)
+    decoder = BinaryPayloadDecoder.fromRegisters(rr.registers, byteorder=Endian.BIG, wordorder=Endian.LITTLE)
     return decoder.decode_32bit_uint()
 
 
