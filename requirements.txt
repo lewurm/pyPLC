@@ -1,2 +1,6 @@
+pcap-ct
 pykoplenti[CLI]
-pypcap
+pyserial
+pymodbus==2.5.3
+requests
+RPi.GPIO

@@ -10,4 +10,4 @@ testresults.txt
 /local
 *.bak
 *.pyc
-
+myenv

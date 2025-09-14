@@ -75,7 +75,7 @@ sudo /home/lewurm/private/open-plc-utils/plc/plcstat -t -i eth0 -d 2 -m -e || ec
 pwd  >> "$logfile"
 
 # call the pyPlc python script
-PYTHONUNBUFFERED=1 /usr/bin/python3 evseNoGui.py e | tee -a "$logfile"
+PYTHONUNBUFFERED=1 python3 evseNoGui.py e | tee -a "$logfile"
 # PYTHONUNBUFFERED=1 /usr/bin/python3 listenerNoGui.py | tee -a "$logfile"
 pwd >> "$logfile"
 date >> "$logfile"
