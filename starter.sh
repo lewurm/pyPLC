@@ -23,7 +23,7 @@ stop_tcpdump() {
 # Function to handle signals
 signal_handler() {
     echo "Caught signal, stopping tcpdump and exiting..."
-    stop_tcpdump
+    # stop_tcpdump
     exit 1
 }
 # Set trap for signals: SIGINT (2), SIGTERM (15)
@@ -45,7 +45,7 @@ set -euv
 sudo ip link set eth0 down
 sleep 1
 sudo ip link set eth0 up
-sleep 1
+sleep 2
 
 # show the addresses
 ip addr
@@ -64,7 +64,7 @@ echo "logfile: $logfile"
 echo "tcpdump_logfile: $tcpdump_logfile"
 
 # start the tcpdump
-start_tcpdump "$tcpdump_logfile"
+# start_tcpdump "$tcpdump_logfile"
 
 echo "$date" >> "$logfile"
 git log --oneline -1 >> "$logfile" || echo "Not a git repo" >> "$logfile"
@@ -81,7 +81,7 @@ pwd >> "$logfile"
 date >> "$logfile"
 
 # Stop the tcpdump when the pyPLC stopped:
-stop_tcpdump
+# stop_tcpdump
 
 
 sudo iwconfig >> "$logfile"
