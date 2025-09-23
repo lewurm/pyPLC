@@ -42,9 +42,9 @@ set -euv
 # Todo: Why this needed? On raspberry, where the NetworkManager is not runnning, this disturbs, because
 # afterwards the pyPlc does not see the interfaces IPv6 address.
 # Todo: make this configurable, for the cases we need this.
-sudo ip link set eth0 down
+sudo ip link set eth0.87 down
 sleep 1
-sudo ip link set eth0 up
+sudo ip link set eth0.87 up
 sleep 2
 
 # show the addresses
@@ -71,7 +71,7 @@ git log --oneline -1 >> "$logfile" || echo "Not a git repo" >> "$logfile"
 ip addr >> "$logfile"
 sudo iwconfig >> "$logfile"
 sudo hciconfig >> "$logfile"
-sudo /home/lewurm/private/open-plc-utils/plc/plcstat -t -i eth0 -d 2 -m -e || echo no plcstat >> "$logfile"
+sudo /home/lewurm/private/open-plc-utils/plc/plcstat -t -i eth0.87 -d 2 -m -e || echo no plcstat >> "$logfile"
 pwd  >> "$logfile"
 
 # call the pyPlc python script
@@ -86,5 +86,5 @@ date >> "$logfile"
 
 sudo iwconfig >> "$logfile"
 sudo hciconfig >> "$logfile"
-sudo /home/lewurm/private/open-plc-utils/plc/plcstat -t -i eth0 -d 2 -m -e || echo no plcstat >> "$logfile"
+sudo /home/lewurm/private/open-plc-utils/plc/plcstat -t -i eth0.87 -d 2 -m -e || echo no plcstat >> "$logfile"
 echo "logfile: $logfile"

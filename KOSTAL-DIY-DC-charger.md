@@ -376,8 +376,30 @@ mode: single
 
 
 ```
-$ sudo sysctl net.ipv6.conf.eth0.keep_addr_on_down=1
 $ sudo setcap cap_net_raw,cap_net_admin=eip `realpath $(which python3)`
-$ sudo sysctl -w net.ipv6.conf.eth0.accept_ra=1
 $ sudo apt install mbpoll
+
+$ nmcli device set eth0 managed no
+
+# dedicated vlan for PLC stuff
+$ nmcli connection add type vlan con-name CCS dev eth0 id 87
+$ nmcli connection modify CCS ipv4.method disabled
+$ nmcli connection modify CCS ipv6.method auto
+
+# vlan for IoT stuff
+$ nmcli connection add type vlan con-name vlan44 dev eth0 id 45
+$ nmcli connection modify vlan44 ipv4.method auto
+
+$ mncli connection up vlan44
+$ mncli connection up CCS
+
+$ nmcli connection
+NAME           UUID                                  TYPE      DEVICE
+CCS            2dc72a2f-b215-47e3-ad34-edf7e2100a43  vlan      eth0.87
+vlan44         81eac5f2-3661-4bd6-8b4d-b0b1552b61e4  vlan      eth0.44
+preconfigured  3ca5d0f3-bca2-4e1c-a62f-b4e2f4c2b2a7  wifi      wlan0
+lo             0a38a526-b617-43a7-a081-6827b8f96dcd  loopback  lo
+
+$ sudo sysctl net.ipv6.conf.eth0/87.keep_addr_on_down=1
+$ sudo sysctl -w net.ipv6.conf.eth0/87.accept_ra=1
 ```

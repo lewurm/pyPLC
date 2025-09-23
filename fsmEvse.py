@@ -46,7 +46,8 @@ class fsmEvse():
             # typically 25-50ms
             # 150ms: seems fine
             # 110ms: TODO: document results
-            threshold = 150
+            # threshold = 150 # with SSD
+            threshold = 1750 # with SD
             diff = (currentMillis() - self.lastCurrentDemandReq)
             if diff > threshold:
                 self.addToTrace(f"SAFETY TIMEOUT (1) triggered, {currentMillis()}ms vs. {self.lastCurrentDemandReq}ms -> {diff}ms")

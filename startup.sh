@@ -10,12 +10,12 @@ source ~/private/pyPLC/myenv/bin/activate
 while sleep 2; do
     ctrl=`curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" $URL/api/states/input_select.dcwb_allow_charging | jq '.state == "yes"'`
     if test xtrue '==' x"$ctrl"; then
-        (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0 -R $PLCMAC ) &
+        (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0.87 -R $PLCMAC ) &
         (cd ~/private/pyPLC && python break-pp.py)
         (cd ~/private/pyPLC && bash -x ./starter.sh)
-        (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0 -R $PLCMAC ) &
+        (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0.87 -R $PLCMAC ) &
         sleep 10
-        # (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0 -P ../evse-.pib EC:08:6B:8B:DC:D6) &
+        # (cd ~/private/open-plc-utils && sudo ./plc/plctool -ieth0.87 -P ../evse-.pib EC:08:6B:8B:DC:D6) &
         # sleep 10
         #
         # trigger home assistant to turn off/on AC plug for wallbox LV DC supply.
